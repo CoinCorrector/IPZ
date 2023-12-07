@@ -173,9 +173,6 @@ with mp_hands.Hands(
 
                 hand_size = 10 * (Euclidean(middle_finger_mcp, wrist))
 
-                # Define a threshold for hand openness based on the hand size
-                hand_open_threshold = hand_size * 0.75  # Adjust the multiplier to suit your needs
-
                 
                 # Estimating the distance to the camera BETA TODO
                 distance_to_camera = round((hand_size) ** -2.1 * 0.6 + 0.4, 2)
@@ -219,13 +216,7 @@ with mp_hands.Hands(
 
 
                 # Display the distance of hand from the monitor
-                if thumb_to_wrist_length > hand_open_threshold and index_to_wrist_length > hand_open_threshold:
-                    cv2.putText(image, distance_str, (x_offset + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2,
-                                cv2.LINE_AA)
-
-                else:
-                    cv2.putText(image, distance_str, (x_offset + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
-                                cv2.LINE_AA)
+                cv2.putText(image, distance_str, (x_offset + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,cv2.LINE_AA)
 
                 x_offset += 150
 
