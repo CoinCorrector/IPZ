@@ -40,6 +40,40 @@ MCPS = [
     mp_hands.HandLandmark.RING_FINGER_MCP,
 ]
 
+def iter_mp_hands(multi_hand_landmarks):
+    for hand_landmarks in multi_hand_landmarks[:MAX_NUM_HANDS]:
+        # Extracting landmarks
+        landmarks = hand_landmarks.landmark
+
+        # Wrist landmark
+        wrist = vec(landmarks[mp_hands.HandLandmark.WRIST])
+
+        # Middle of the palm from vector average
+        palm_mid = np.copy(wrist)
+
+        # Finger distances
+        d_tips = list()
+        d_mcps = list()
+
+        for mcp_i, tip_i in zip(MCPS, TIPS):
+            mcp = vec(landmarks[mcp_i])
+            tip = vec(landmarks[tip_i])
+            d_tips.append(linalg.norm(tip - wrist))
+            d_mcps.append(linalg.norm(mcp - wrist))
+
+            palm_mid += mcp
+
+            if DRAW_OVERLAY_FINGERS:
+                draw_circle(image, mcp, 12, (0, 0, 200))
+                draw_circle(image, tip, 12, (0, 200, 0))
+                draw_circle(image, wrist, 12, (200, 0, 0))
+
+        palm_mid /= (len(MCPS) + 1)
+        d_tips = np.array(d_tips)
+        d_mcps = np.array(d_mcps)
+
+        yield (hand_landmarks, palm_mid, (d_tips, d_mcps))
+
 class HandState:
     OPEN = 0
     CLOSED = 1
@@ -73,6 +107,10 @@ class Hand:
 
     def pos(self):
         return self.pos_hist[-1]
+
+    def median_pos(self, n):
+        pos = np.array(self.pos_hist.last_n(n))
+        return np.median(pos, axis=0)
 
     def mean_velocity(self, n):
         pos = np.array(self.pos_hist.last_n(n))
@@ -157,77 +195,55 @@ with mp_hands.Hands(
                 hand_mapping[i] = None
 
         if hands_present > 0:
-            for mp_i, hand_landmarks in enumerate(results.multi_hand_landmarks[:MAX_NUM_HANDS]):
-                if DRAW_LANDMARKS:
-                    mp_drawing.draw_landmarks(image, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            # (landmarks, pos, (d_tips, d_mcps))
+            model_hands = list(iter_mp_hands(results.multi_hand_landmarks))
 
-                # Extracting landmarks
-                landmarks = hand_landmarks.landmark
+            if renew_hand_mapping:
+                model_to_marker_dist = np.zeros((hands_present, MAX_NUM_HANDS))
+                HAND_POS_CMP_MEDIAN = 8
 
-                # Get the landmarks for the fingertips and the base of the hand (wrist)
-                thumb_tip = vec(landmarks[mp_hands.HandLandmark.THUMB_TIP])
-                thumb_ip = vec(landmarks[mp_hands.HandLandmark.THUMB_IP])
-                index_finger_tip = vec(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP])
+                for i in range(hands_present):
+                    _, pos, _ = model_hands[i]
+                    dist_to_model = lambda x: linalg.norm(pos - x.median_pos(HAND_POS_CMP_MEDIAN))
+                    model_to_marker_dist[i, :] = list(map(dist_to_model, hands))
 
-                # Wrist landmark
-                wrist = vec(landmarks[mp_hands.HandLandmark.WRIST])
+                for i in range(hands_present):
+                    m2m = model_to_marker_dist[:, :]
+                    print(f'm2m[{i}]', m2m)
 
-                # Middle of the palm from vector average
-                palm_mid = np.copy(wrist)
+                    d_min = m2m.argmin(axis=1)
+                    dist_map = m2m[range(hands_present), d_min]
+                    closest_model = dist_map.argmin()
 
-                # Finger distances
-                d_tips = list()
-                d_mcps = list()
+                    hand_idx = d_min[closest_model]
+                    hand_mapping[closest_model] = hand_idx
+                    print(f'Map model[{closest_model}] -> hand[{hand_idx}]')
 
-                for mcp_i, tip_i in zip(MCPS, TIPS):
-                    mcp = vec(landmarks[mcp_i])
-                    tip = vec(landmarks[tip_i])
-                    d_tips.append(linalg.norm(tip - wrist))
-                    d_mcps.append(linalg.norm(mcp - wrist))
+                    # Mask out the hand which was just mapped
+                    model_to_marker_dist[:, hand_idx] = 1e9
+                    model_to_marker_dist[closest_model, :] = 1e9
 
-                    palm_mid += mcp
-
-                    if DRAW_OVERLAY_FINGERS:
-                        draw_circle(image, mcp, 12, (0, 0, 200))
-                        draw_circle(image, tip, 12, (0, 200, 0))
-                        draw_circle(image, wrist, 12, (200, 0, 0))
-
-                palm_mid /= (len(MCPS) + 1)
-                d_tips = np.array(d_tips)
-                d_mcps = np.array(d_mcps)
-
-                if renew_hand_mapping:
-                    dist_to_current = lambda x: linalg.norm(palm_mid - x[1].pos())
-
-                    for (i, hand) in sorted(enumerate(hands), key=dist_to_current):
-                        if not i in hand_mapping:
-                            hand_mapping[mp_i] = i
-                            break
-
-                current_hand = hands[hand_mapping[mp_i]]
+            for i in range(hands_present):
+                current_hand = hands[hand_mapping[i]]
                 current_hand.visible = True
-
-                if DRAW_OVERLAY_PALM:
-                    draw_circle(image, palm_mid, 20, (200, 200, 200))
-
-                    v = current_hand.mean_velocity(5)
-                    draw_line(image, palm_mid, palm_mid + v/30, (200, 0, 0))
+                landmarks, pos, (d_tips, d_mcps) = model_hands[i]
 
                 # Update hand position
-                current_hand.pos_hist.push(palm_mid)
+                current_hand.pos_hist.push(pos)
 
-                finger_tip_thumb_tip = linalg.norm(index_finger_tip - thumb_tip)
-                thumb_ip_thumb_tip = linalg.norm(thumb_tip - thumb_ip)
+                #finger_tip_thumb_tip = linalg.norm(index_finger_tip - thumb_tip)
+                #thumb_ip_thumb_tip = linalg.norm(thumb_tip - thumb_ip)
 
                 # Update hand pinch and close
-                current_hand.pinch_hist.push(finger_tip_thumb_tip < thumb_ip_thumb_tip)
-                current_hand.close_hist.push(d_tips.sum() < d_mcps.sum())
-                current_hand.update_state()
+                #current_hand.pinch_hist.push(finger_tip_thumb_tip < thumb_ip_thumb_tip)
+                #current_hand.close_hist.push(d_tips.sum() < d_mcps.sum())
+                #current_hand.update_state()
 
                 # Calculate the Euclidean distance between the hand and circle center
-                hand_circle_distance = math.sqrt(
-                    (circle_position[0] - palm_mid[0] * image.shape[1]) ** 2
-                    + (circle_position[1] - palm_mid[1] * image.shape[0]) ** 2)
+                if 0:
+                    hand_circle_distance = math.sqrt(
+                        (circle_position[0] - palm_mid[0] * image.shape[1]) ** 2
+                        + (circle_position[1] - palm_mid[1] * image.shape[0]) ** 2)
 
                 # Checking if hand is at the circle 
                 if current_hand.state == HandState.PINCH:
@@ -243,9 +259,17 @@ with mp_hands.Hands(
 
         for i, hand in enumerate(hands):
             if hand.visible:
-                text = f'{i} {HandState.name(hand.state)}'
+                pos = hand.pos()
+
+                if DRAW_OVERLAY_PALM:
+                    draw_circle(image, pos, 20, (200, 200, 200))
+
+                    v = hand.mean_velocity(5)
+                    draw_line(image, pos, pos + v/30, (200, 0, 0))
+                    draw_text(image, f'{i}', pos, (200, 200, 200))
+
+                text = f'{i} ({pos[0]:.2f}, {pos[1]:.2f}) {HandState.name(hand.state)}'
                 color = (0, 0, 255)
-                draw_text(image, f'{i}', hand.pos(), (200, 200, 200))
                 cv2.putText(image, text, (10, 30 * (i + 1)), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
 
         if renew_hand_mapping:
