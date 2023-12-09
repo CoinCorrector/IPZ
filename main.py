@@ -72,7 +72,7 @@ def iter_mp_hands(multi_hand_landmarks):
         d_tips = np.array(d_tips)
         d_mcps = np.array(d_mcps)
 
-        yield (hand_landmarks, palm_mid, (d_tips, d_mcps))
+        yield (landmarks, palm_mid, (d_tips, d_mcps))
 
 class HandState:
     OPEN = 0
@@ -152,9 +152,11 @@ def draw_circle(img, v, r, color):
 # Video capturing
 cap = cv2.VideoCapture(0)
 
-# List of all to keep track of
+# List of all hands to keep track of
 hands = [Hand() for i in range(MAX_NUM_HANDS)]
+# Table mapping model index to hand index, None means hands_present < MAX_NUM_HANDS
 hand_mapping = [None for i in range(MAX_NUM_HANDS)]
+# State for mapping renewal, happens only when number of hands reported by model changes
 renew_hand_mapping = False
 prev_hands_present = 0
 
@@ -178,16 +180,15 @@ with mp_hands.Hands(
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        # Draw circle
-        cv2.circle(image, circle_position, circle_radius, (0, 0, 255), -1)
-
         hands_present = len(results.multi_hand_landmarks if results.multi_hand_landmarks else [])
 
+        # Number of hands changed, renew mapping
         if prev_hands_present != hands_present:
             print(f'Change in num of hands: {prev_hands_present} -> {hands_present}')
             prev_hands_present = hands_present
             renew_hand_mapping = True
 
+        # Hide visibility of all hands, if hand is present it will be set to True
         for i in range(MAX_NUM_HANDS):
             hands[i].visible = False
             # Clear hand mapping if regenerating
@@ -199,14 +200,19 @@ with mp_hands.Hands(
             model_hands = list(iter_mp_hands(results.multi_hand_landmarks))
 
             if renew_hand_mapping:
-                model_to_marker_dist = np.zeros((hands_present, MAX_NUM_HANDS))
                 HAND_POS_CMP_MEDIAN = 8
+                # Distance cross matrix between model reported hand and internal state hand
+                model_to_marker_dist = np.zeros((hands_present, MAX_NUM_HANDS))
 
+                # Populate distances between model hand and all MAX_NUM_HANDS hands
                 for i in range(hands_present):
                     _, pos, _ = model_hands[i]
                     dist_to_model = lambda x: linalg.norm(pos - x.median_pos(HAND_POS_CMP_MEDIAN))
                     model_to_marker_dist[i, :] = list(map(dist_to_model, hands))
 
+                # Finds the model hand closest to some internal hand and assigns the correct mapping,
+                # currently assigned hand distances get masked out
+                MASKED_DISTANCE = 1e9
                 for i in range(hands_present):
                     m2m = model_to_marker_dist[:, :]
                     print(f'm2m[{i}]', m2m)
@@ -220,30 +226,34 @@ with mp_hands.Hands(
                     print(f'Map model[{closest_model}] -> hand[{hand_idx}]')
 
                     # Mask out the hand which was just mapped
-                    model_to_marker_dist[:, hand_idx] = 1e9
-                    model_to_marker_dist[closest_model, :] = 1e9
+                    model_to_marker_dist[:, hand_idx] = MASKED_DISTANCE
+                    model_to_marker_dist[closest_model, :] = MASKED_DISTANCE
 
+            # Old logic implementing per hand behavior
             for i in range(hands_present):
                 current_hand = hands[hand_mapping[i]]
                 current_hand.visible = True
-                landmarks, pos, (d_tips, d_mcps) = model_hands[i]
+                landmarks, model_pos, (d_tips, d_mcps) = model_hands[i]
 
                 # Update hand position
-                current_hand.pos_hist.push(pos)
+                current_hand.pos_hist.push(model_pos)
 
-                #finger_tip_thumb_tip = linalg.norm(index_finger_tip - thumb_tip)
-                #thumb_ip_thumb_tip = linalg.norm(thumb_tip - thumb_ip)
+                index_finger_tip = vec(landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP])
+                thumb_tip = vec(landmarks[mp_hands.HandLandmark.THUMB_TIP])
+                thumb_ip = vec(landmarks[mp_hands.HandLandmark.THUMB_IP])
+
+                finger_tip_thumb_tip = linalg.norm(index_finger_tip - thumb_tip)
+                thumb_ip_thumb_tip = linalg.norm(thumb_tip - thumb_ip)
 
                 # Update hand pinch and close
-                #current_hand.pinch_hist.push(finger_tip_thumb_tip < thumb_ip_thumb_tip)
-                #current_hand.close_hist.push(d_tips.sum() < d_mcps.sum())
-                #current_hand.update_state()
+                current_hand.pinch_hist.push(finger_tip_thumb_tip < thumb_ip_thumb_tip)
+                current_hand.close_hist.push(d_tips.sum() < d_mcps.sum())
+                current_hand.update_state()
 
                 # Calculate the Euclidean distance between the hand and circle center
-                if 0:
-                    hand_circle_distance = math.sqrt(
-                        (circle_position[0] - palm_mid[0] * image.shape[1]) ** 2
-                        + (circle_position[1] - palm_mid[1] * image.shape[0]) ** 2)
+                hand_circle_distance = math.sqrt(
+                    (circle_position[0] - model_pos[0] * image.shape[1]) ** 2
+                    + (circle_position[1] - model_pos[1] * image.shape[0]) ** 2)
 
                 # Checking if hand is at the circle 
                 if current_hand.state == HandState.PINCH:
@@ -252,10 +262,15 @@ with mp_hands.Hands(
                 else:
                     dragging = False
 
+                # FIXME: Currently broken when >1 hand is present, dragging should keep track of dragging hand
+                # FIXME: Change circle_position to use normalized coordinates?
                 if dragging: 
                     circle_position = (
-                        int(palm_mid[0] * image.shape[1]),
-                        int(palm_mid[1] * image.shape[0]))
+                        int(model_pos[0] * image.shape[1]),
+                        int(model_pos[1] * image.shape[0]))
+
+        # Draw circle
+        cv2.circle(image, circle_position, circle_radius, (0, 0, 255), -1)
 
         for i, hand in enumerate(hands):
             if hand.visible:
