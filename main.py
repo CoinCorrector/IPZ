@@ -7,7 +7,7 @@ from collections import deque
 
 # Model params
 MAX_NUM_HANDS = 4
-DETECTION_CONFIDENCE = 0.2
+DETECTION_CONFIDENCE = 0.4
 TRACKING_CONFIDENCE = 0.5
 # Render params
 DRAW_OVERLAY_PALM = True
@@ -180,7 +180,7 @@ with mp_hands.Hands(
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        hands_present = len(results.multi_hand_landmarks if results.multi_hand_landmarks else [])
+        hands_present = min(len(results.multi_hand_landmarks if results.multi_hand_landmarks else []), MAX_NUM_HANDS)
 
         # Number of hands changed, renew mapping
         if prev_hands_present != hands_present:
