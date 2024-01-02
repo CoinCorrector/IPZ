@@ -4,6 +4,11 @@ from numpy import linalg
 import cv2
 import math
 from collections import deque
+import json
+import socket
+from threading import Thread
+from queue import Queue
+from select import select
 
 # Model params
 MAX_NUM_HANDS = 4
@@ -15,6 +20,56 @@ DRAW_OVERLAY_FINGERS = False
 DRAW_LANDMARKS = False
 # Event triggering params
 PINCH_REQUIRE_LAST = 4
+
+# Server sends two kinds of messages
+# - Hand state changed ('hand_id': int, 'state': str)
+# - Hand position update ('hand_id': int, 'pos': [float x 3])
+class EventServer:
+    def __init__(self, port):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind(('0.0.0.0', port))
+        self.sock.listen(1)
+
+        self.event_queue = Queue()
+        self.clients = list()
+        self.accept_thread = Thread(target=self._accept_loop)
+        self.send_thread = Thread(target=self._send_loop)
+
+    def _accept_loop(self):
+        while self.running:
+            readfd, _, _ = select([self.sock], [], [], 0.5)
+            if self.sock in readfd:
+                client_sock, _ = self.sock.accept()
+                self.clients.append(client_sock)
+
+    def _send_loop(self):
+        while self.running:
+            if msg := self.event_queue.get():
+                bad_clients = []
+                for sock in self.clients:
+                    try:
+                        sock.send(msg)
+                    except Exception:
+                        bad_clients.append(sock)
+                for sock in bad_clients:
+                    self.clients.remove(sock)
+
+    def start(self):
+        self.running = True
+        self.accept_thread.start()
+        self.send_thread.start()
+
+    def stop(self):
+        self.running = False
+        self.event_queue.put(None)
+
+    def send(self, event):
+        msg = json.dumps(event).encode()
+        self.event_queue.put(msg)
+
+# Create server for pushing events to client
+server = EventServer(8080)
+server.start()
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -96,7 +151,8 @@ class History:
         return self.hist[i]
 
 class Hand:
-    def __init__(self):
+    def __init__(self, idx):
+        self.idx = idx
         self.visible = False
         self.state = HandState.OPEN
         self.pos_hist = History(120)
@@ -118,19 +174,26 @@ class Hand:
         return vel.sum(axis=0) / n
 
     def update_state(self):
+        notify_changed = lambda state: server.send({'hand_id': self.idx, 'state': state})
+
         if self.state == HandState.OPEN:
             if sum(self.pinch_hist.last_n(5)) >= 3:
                 self.state = HandState.PINCH
+                notify_changed('PINCH')
             elif all(self.close_hist.last_n(3)):
                 self.state = HandState.CLOSED
+                notify_changed('CLOSED')
         elif self.state == HandState.CLOSED:
             if not any(self.close_hist.last_n(5)):
                 self.state = HandState.OPEN
+                notify_changed('OPEN')
         elif self.state == HandState.PINCH:
             if sum(self.close_hist.last_n(5)) >= 4:
                 self.state = HandState.CLOSED
+                notify_changed('CLOSED')
             elif not any(self.pinch_hist.last_n(4)):
                 self.state = HandState.OPEN
+                notify_changed('OPEN')
 
 def draw_text(img, text, v, color):
     h, w, _ = img.shape
@@ -153,7 +216,7 @@ def draw_circle(img, v, r, color):
 cap = cv2.VideoCapture(0)
 
 # List of all hands to keep track of
-hands = [Hand() for i in range(MAX_NUM_HANDS)]
+hands = [Hand(i) for i in range(MAX_NUM_HANDS)]
 # Table mapping model index to hand index, None means hands_present < MAX_NUM_HANDS
 hand_mapping = [None for i in range(MAX_NUM_HANDS)]
 # State for mapping renewal, happens only when number of hands reported by model changes
@@ -276,6 +339,9 @@ with mp_hands.Hands(
             if hand.visible:
                 pos = hand.pos()
 
+                # Send out updated position for i'th hand
+                server.send({'hand_id': i, 'pos': pos.tolist()})
+
                 if DRAW_OVERLAY_PALM:
                     draw_circle(image, pos, 20, (200, 200, 200))
 
@@ -299,5 +365,7 @@ with mp_hands.Hands(
         if cv2.waitKey(5) & 0xFF == 27:
             break
 
+# Cleanup
+server.stop()
 cap.release()
 cv2.destroyAllWindows()
