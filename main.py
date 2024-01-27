@@ -48,7 +48,7 @@ class EventServer:
                 bad_clients = []
                 for sock in self.clients:
                     try:
-                        sock.send(msg)
+                        sock.send(msg + b'\x00')
                     except Exception:
                         bad_clients.append(sock)
                 for sock in bad_clients:
@@ -68,7 +68,7 @@ class EventServer:
         self.event_queue.put(msg)
 
 # Create server for pushing events to client
-server = EventServer(8080)
+server = EventServer(9111)
 server.start()
 
 mp_drawing = mp.solutions.drawing_utils
