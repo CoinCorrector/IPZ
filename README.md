@@ -2,43 +2,44 @@
 
 ## Opis projektu
 
-Projekt skÅ‚ada siÄ™ z dwÃ³ch gÅ‚Ã³wnych skryptÃ³w: main.py i mouse.py. Skrypt main.py wykorzystuje bibliotekÄ™ MediaPipe do Å›ledzenia gestÃ³w rÄ™ki w czasie rzeczywistym, natomiast mouse.py umoÅ¼liwia kontrolÄ™ kursora myszy na podstawie pozycji Å›rodka dÅ‚oni wykrytej przez main.py.
+Projekt składa się z dwóch głównych skryptów: `main.py` i `mouse.py`. Skrypt `main.py` wykorzystuje bibliotekę MediaPipe do śledzenia gestów ręki w czasie rzeczywistym, natomiast `mouse.py` umożliwia kontrolę kursora myszy na podstawie pozycji środka dłoni wykrytej przez `main.py`.
 
 ### Wymagane biblioteki
 
-- mediapipe
-- numpy
-- opencv-python (cv2)
-- pyautogui
-- socket
-- threading
-- queue
-- json
+- `mediapipe`
+- `numpy`
+- `opencv-python (cv2)`
+- `pyautogui`
+- `socket`
+- `threading`
+- `queue`
+- `json`
 
-## Jak uruchomiÄ‡
+## Jak uruchomić
 
-Upewnij siÄ™, Å¼e wszystkie wymagane biblioteki sÄ… zainstalowane.
-Uruchom skrypt main.py w celu rozpoczÄ™cia Å›ledzenia gestÃ³w rÄ™ki.
-W nowym terminalu uruchom mouse.py, aby poÅ‚Ä…czyÄ‡ siÄ™ z serwerem utworzonym przez main.py i zaczÄ…Ä‡ kontrolowaÄ‡ kursor myszy za pomocÄ… ruchÃ³w rÄ™ki.
+Upewnij się, że wszystkie wymagane biblioteki są zainstalowane.
+Uruchom skrypt `main.py` w celu rozpoczęcia śledzenia gestów ręki.
+W nowym terminalu uruchom `mouse.py`, aby połączyć się z serwerem utworzonym przez `main.py` i zacząć kontrolować kursor myszy za pomocą ruchów ręki.
 
 ## Zmienne do edycji
 
-### main.py
+### `main.py`
 
-- MAX_NUM_HANDS: Maksymalna liczba dÅ‚oni do wykrycia (domyÅ›lnie 4).
-- DETECTION_CONFIDENCE: PrÃ³g pewnoÅ›ci detekcji dÅ‚oni (domyÅ›lnie 0.4).
-- TRACKING_CONFIDENCE: PrÃ³g pewnoÅ›ci Å›ledzenia dÅ‚oni (domyÅ›lnie 0.5).
-- DRAW_OVERLAY_PALM: WÅ‚Ä…cza/wyÅ‚Ä…cza rysowanie nakÅ‚adki na Å›rodku dÅ‚oni (domyÅ›lnie True).
-- DRAW_OVERLAY_FINGERS: WÅ‚Ä…cza/wyÅ‚Ä…cza rysowanie nakÅ‚adek na palcach (domyÅ›lnie False).
-- DRAW_LANDMARKS: WÅ‚Ä…cza/wyÅ‚Ä…cza rysowanie znacznikÃ³w na dÅ‚oni (domyÅ›lnie False).
-- PINCH_REQUIRE_LAST: Liczba ostatnich prÃ³bek do rozwaÅ¼enia przy wykrywaniu szczypania (domyÅ›lnie 4).
+- `MAX_NUM_HANDS`: Maksymalna liczba dłoni do wykrycia (domyślnie 4).
+- `DETECTION_CONFIDENCE`: Prog pewności detekcji dłoni (domyślnie 0.4).
+- `TRACKING_CONFIDENCE`: Prog pewności śledzenia dłoni (domyślnie 0.5).
+- `DRAW_OVERLAY_PALM`: Włącza/wyłącza rysowanie nakładki na środku dłoni (domyślnie True).
+- `DRAW_OVERLAY_FINGERS`: Włącza/wyłącza rysowanie nakładek na palcach (domyślnie False).
+- `DRAW_LANDMARKS`: Włącza/wyłącza rysowanie znaczników na dłoni (domyślnie False).
+- `PINCH_REQUIRE_LAST`: Liczba ostatnich próbek do rozważenia przy wykrywaniu szczypania (domyślnie 4).
 
-### mouse.py
+### `mouse.py`
 
-- addr: Adres IP serwera do poÅ‚Ä…czenia (domyÅ›lnie 'localhost:9111').
-- width, height: RozdzielczoÅ›Ä‡ ekranu, na ktÃ³rym ma byÄ‡ kontrolowany kursor. DomyÅ›lnie ustawiane na rozdzielczoÅ›Ä‡ gÅ‚Ã³wnego ekranu.
+- `addr`: Adres IP serwera do połączenia (domyślnie 'localhost:9111').
+- `width`, `height`: Rozdzielczość ekranu, na którym ma być kontrolowany kursor. Domyślnie ustawiane na rozdzielczość głównego ekranu.
 
 ## Uwagi
 
-Aby zmieniÄ‡ zachowanie Å›ledzenia gestÃ³w rÄ™ki lub kontrolowania kursora myszy, odpowiednie zmienne moÅ¼na dostosowaÄ‡ w kodzie ÅºrÃ³dÅ‚owym.
-NaleÅ¼y upewniÄ‡ siÄ™, Å¼e skrypt mouse.py jest uruchomiony na tym samym urzÄ…dzeniu co main.py lub w sieci, ktÃ³ra pozwala na komunikacjÄ™ miÄ™dzy urzÄ…dzeniami.
+Aby zmienić zachowanie śledzenia gestów ręki lub kontrolowania kursora myszy, odpowiednie zmienne można dostosować w kodzie źródłowym.
+Należy upewnić się, że skrypt `mouse.py` jest uruchomiony na tym samym urządzeniu co `main.py` lub w sieci, która pozwala na komunikację między urządzeniami.
+
