@@ -10,10 +10,6 @@ Projekt składa się z dwóch głównych skryptów: `main.py` i `mouse.py`. Skry
 - `numpy`
 - `opencv-python (cv2)`
 - `pyautogui`
-- `socket`
-- `threading`
-- `queue`
-- `json`
 
 ## Jak uruchomić
 
