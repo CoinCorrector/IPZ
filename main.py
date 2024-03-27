@@ -9,6 +9,8 @@ import socket
 from threading import Thread
 from queue import Queue
 from select import select
+from pathlib import Path
+from os import getenv
 
 # Model params
 MAX_NUM_HANDS = 4
@@ -20,6 +22,103 @@ DRAW_OVERLAY_FINGERS = False
 DRAW_LANDMARKS = False
 # Event triggering params
 PINCH_REQUIRE_LAST = 4
+
+LAST_DETECTION = None
+
+class GestureProcessor:
+    class CaptureState:
+        def __init__(self, label, hand_id):
+            self.label = label
+            self.hand_id = hand_id
+            self.points = list()
+
+    def __init__(self):
+        self.capture_dir = Path('capture')
+        self.captures = dict()
+        self.current_capture = None
+        self.load_captures()
+
+    def load_captures(self):
+        self.capture_dir.mkdir(exist_ok=True)
+        for f in self.capture_dir.glob('*.npy'):
+            self.captures[f.stem] = np.load(str(f))
+
+    def begin_capture(self, label, hand_id):
+        self.current_capture = GestureProcessor.CaptureState(label, hand_id)
+        print('=' * 80)
+        print(f'CAPTURING {label} ON HAND {hand_id}')
+        print('=' * 80)
+
+    def end_capture(self, commit_d=0.01):
+        cap = self.current_capture
+        points = np.array(cap.points)
+        out_points = np.zeros((0, 2))
+
+        # Space points equally
+        p = np.diff(points, axis=0)
+        d = np.hypot(*p.T)
+        total_d = 0
+
+        for i, p in enumerate(points[:-1]):
+            if total_d >= commit_d:
+                out_points = np.r_[out_points, [p]]
+                total_d = 0
+            else:
+                total_d += d[i]
+
+        cap_path = self.capture_dir / f'{cap.label}.npy'
+        print('=' * 80)
+        print(f'SAVING {cap.label} TO {str(cap_path)}')
+        np.save(str(cap_path), out_points)
+        print('=' * 80)
+
+        self.current_capture = None
+
+    def get_capturing_hand_id(self):
+        if cap := self.current_capture:
+            return cap.hand_id
+
+    def is_capturing(self):
+        if cap := self.current_capture:
+            return cap.label is not None
+
+    def begin_detection(self, hand_id):
+        self.current_capture = GestureProcessor.CaptureState(None, hand_id)
+        print('=' * 80)
+        print(f'DETECTING ON HAND {hand_id}')
+        print('=' * 80)
+    
+    def end_detection(self):
+        p = np.array(self.current_capture.points)
+        z = (p.T[0] + 1j * p.T[1])
+        w = np.fft.fft(z)
+
+        d_best = 1e9
+        label_best = None
+
+        for label, target in self.captures.items():
+            z2_ = target.T[0] + 1j * target.T[1]
+            z2 = np.interp(np.linspace(0, 1, len(z)), np.linspace(0, 1, len(z2_)), z2_)
+            w2 = np.fft.fft(z2)
+
+            d = np.abs(w - w2).sum()
+            if d < d_best:
+                d_best = d
+                label_best = label
+
+        print('=' * 80)
+        print(f'DETECTION RESULT {label_best}')
+        print('=' * 80)
+
+        global LAST_DETECTION
+        LAST_DETECTION = label_best
+
+    def update(self, hand):
+        if cap := self.current_capture:
+            if cap.hand_id == hand.idx:
+                cap.points.append(hand.pos()[:2])
+
+gesture_processor = GestureProcessor()
 
 # Server sends two kinds of messages
 # - Hand state changed ('hand_id': int, 'state': str)
@@ -158,6 +257,7 @@ class Hand:
         self.pos_hist = History(120)
         self.pinch_hist = History(30)
         self.close_hist = History(30)
+        self.state_changed_cbs = list()
         # Default position
         self.pos_hist.push(np.array([-1,-1,0]))
 
@@ -173,27 +273,30 @@ class Hand:
         vel = (pos[1:] - pos[:-1]) * 30
         return vel.sum(axis=0) / n
 
+    def register_state_callback(self, cb):
+        self.state_changed_cbs.append(cb)
+
     def update_state(self):
-        notify_changed = lambda state: server.send({'hand_id': self.idx, 'state': state})
+        notify_changed = lambda pstate, state: [cb(pstate, state) for cb in self.state_changed_cbs]
 
         if self.state == HandState.OPEN:
             if sum(self.pinch_hist.last_n(5)) >= 3:
                 self.state = HandState.PINCH
-                notify_changed('PINCH')
+                notify_changed('OPEN', 'PINCH')
             elif all(self.close_hist.last_n(3)):
                 self.state = HandState.CLOSED
-                notify_changed('CLOSED')
+                notify_changed('OPEN', 'CLOSED')
         elif self.state == HandState.CLOSED:
             if not any(self.close_hist.last_n(5)):
                 self.state = HandState.OPEN
-                notify_changed('OPEN')
+                notify_changed('CLOSED', 'OPEN')
         elif self.state == HandState.PINCH:
             if sum(self.close_hist.last_n(5)) >= 4:
                 self.state = HandState.CLOSED
-                notify_changed('CLOSED')
+                notify_changed('PINCH', 'CLOSED')
             elif not any(self.pinch_hist.last_n(4)):
                 self.state = HandState.OPEN
-                notify_changed('OPEN')
+                notify_changed('PINCH', 'OPEN')
 
 def draw_text(img, text, v, color):
     h, w, _ = img.shape
@@ -223,6 +326,37 @@ hand_mapping = [None for i in range(MAX_NUM_HANDS)]
 renew_hand_mapping = False
 prev_hands_present = 0
 
+gestures_to_capture = deque([x for x in getenv('CAPTURE_LIST', '').split(':') if x])
+
+# Register hand callbacks
+for hand in hands:
+    class Handlers:
+        def __init__(self, idx):
+            self.idx = idx
+
+        def send_message(self, pstate, state):
+            server.send({'hand_id': self.idx, 'pstate': pstate, 'state': state})
+
+        def end_capture(self, pstate, state):
+            if pstate == 'PINCH' and gesture_processor.get_capturing_hand_id() == self.idx:
+                if gesture_processor.is_capturing():
+                    gesture_processor.end_capture()
+                else:
+                    gesture_processor.end_detection()
+
+        def begin_capture(self,pstate, state):
+            if state == 'PINCH':
+                if len(gestures_to_capture) > 0:
+                    label = gestures_to_capture.popleft()
+                    gesture_processor.begin_capture(label, self.idx)
+                else:
+                    gesture_processor.begin_detection(self.idx)
+
+    handlers = Handlers(hand.idx)
+    hand.register_state_callback(handlers.send_message)
+    hand.register_state_callback(handlers.end_capture)
+    hand.register_state_callback(handlers.begin_capture)
+
 with mp_hands.Hands(
         max_num_hands=MAX_NUM_HANDS,
         min_detection_confidence=DETECTION_CONFIDENCE,
@@ -247,7 +381,7 @@ with mp_hands.Hands(
 
         # Number of hands changed, renew mapping
         if prev_hands_present != hands_present:
-            print(f'Change in num of hands: {prev_hands_present} -> {hands_present}')
+            #print(f'Change in num of hands: {prev_hands_present} -> {hands_present}')
             prev_hands_present = hands_present
             renew_hand_mapping = True
 
@@ -278,7 +412,7 @@ with mp_hands.Hands(
                 MASKED_DISTANCE = 1e9
                 for i in range(hands_present):
                     m2m = model_to_marker_dist[:, :]
-                    print(f'm2m[{i}]', m2m)
+                    #print(f'm2m[{i}]', m2m)
 
                     d_min = m2m.argmin(axis=1)
                     dist_map = m2m[range(hands_present), d_min]
@@ -286,7 +420,7 @@ with mp_hands.Hands(
 
                     hand_idx = d_min[closest_model]
                     hand_mapping[closest_model] = hand_idx
-                    print(f'Map model[{closest_model}] -> hand[{hand_idx}]')
+                    #print(f'Map model[{closest_model}] -> hand[{hand_idx}]')
 
                     # Mask out the hand which was just mapped
                     model_to_marker_dist[:, hand_idx] = MASKED_DISTANCE
@@ -320,6 +454,8 @@ with mp_hands.Hands(
 
                 # Checking if hand is at the circle 
                 if current_hand.state == HandState.PINCH:
+                    gesture_processor.update(current_hand)
+
                     if hand_circle_distance <= circle_radius:
                         dragging = True
                 else:
@@ -333,7 +469,7 @@ with mp_hands.Hands(
                         int(model_pos[1] * image.shape[0]))
 
         # Draw circle
-        cv2.circle(image, circle_position, circle_radius, (0, 0, 255), -1)
+        #cv2.circle(image, circle_position, circle_radius, (0, 0, 255), -1)
 
         for i, hand in enumerate(hands):
             if hand.visible:
@@ -353,10 +489,14 @@ with mp_hands.Hands(
                 color = (0, 0, 255)
                 cv2.putText(image, text, (10, 30 * (i + 1)), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
 
+        if LAST_DETECTION:
+            cv2.putText(image, LAST_DETECTION, (10, 30 * 5), cv2.FONT_HERSHEY_SIMPLEX, 2, color, 2, cv2.LINE_AA)
+
         if renew_hand_mapping:
-            print('Hand mapping table [mp] -> [hand_idx]')
+            #print('Hand mapping table [mp] -> [hand_idx]')
             for mp_i, i in enumerate(hand_mapping):
-                print(f'[{mp_i}] -> [{i}]')
+                #print(f'[{mp_i}] -> [{i}]')
+                pass
 
         renew_hand_mapping = False
 
